@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<!--
+  =====================================================================
+  HEYTECH · Sistema Contable (Ingresos y Egresos)
+  ---------------------------------------------------------------------
+  - Archivo único: HTML + Tailwind CSS (CDN) + Alpine.js (CDN)
+  - Persistencia: localStorage del navegador (no necesita servidor)
+  - Reportes PDF: jsPDF + jsPDF-AutoTable (CDN)
+  - Requiere conexión a internet SOLO para cargar las librerías CDN.
+  - IMPORTANTE: los datos viven en este navegador. Usa "Respaldo" en
+    Configuración para exportar/importar una copia en JSON.
+  =====================================================================
+-->
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Heytech · Contabilidad</title>
+
+  <!-- Librerías -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    /* Números alineados */
+    .tabular { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800 min-h-screen" x-data="app()" x-init="init()" x-cloak>
+
+  <!-- ============================ ENCABEZADO ============================ -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-20">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <!-- Marca -->
+      <div class="flex items-center gap-3 min-w-0">
+        <template x-if="config.logo">
+          <img :src="config.logo" alt="Logo" class="h-10 w-10 object-contain rounded">
+        </template>
+        <template x-if="!config.logo">
+          <div class="h-10 w-10 rounded-lg bg-slate-900 text-white flex items-center justify-center font-bold"
+               x-text="(config.name || 'H').charAt(0).toUpperCase()"></div>
+        </template>
+        <div class="min-w-0">
+          <h1 class="font-semibold leading-tight truncate" x-text="config.name || 'Mi negocio'"></h1>
+          <p class="text-xs text-slate-500">Contabilidad · Ingresos y egresos</p>
+        </div>
+      </div>
+
+      <!-- Selector de mes y año (filtra TODO el sistema) -->
+      <div class="flex items-center gap-2">
+        <select x-model.number="selMonth" class="rounded-lg border-slate-300 border bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400">
+          <template x-for="(m, i) in monthNames" :key="i">
+            <option :value="i + 1" x-text="m"></option>
+          </template>
+        </select>
+        <select x-model.number="selYear" class="rounded-lg border-slate-300 border bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400">
+          <template x-for="y in years" :key="y">
+            <option :value="y" x-text="y"></option>
+          </template>
+        </select>
+      </div>
+    </div>
+
+    <!-- Navegación -->
+    <nav class="max-w-6xl mx-auto px-4 flex gap-1 overflow-x-auto">
+      <template x-for="t in tabs" :key="t.id">
+        <button @click="goTab(t.id)"
+                class="px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition"
+                :class="tab === t.id ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800'"
+                x-text="t.label"></button>
+      </template>
+    </nav>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+
+    <!-- ============================ DASHBOARD ============================ -->
+    <section x-show="tab === 'dashboard'" class="space-y-6">
+      <div>
+        <h2 class="text-lg font-semibold">Resumen de <span x-text="periodLabel"></span></h2>
+        <p class="text-sm text-slate-500">Indicadores y desglose por categoría del mes seleccionado.</p>
+      </div>
+
+      <!-- KPIs -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-white rounded-xl border border-slate-200 p-5">
+          <p class="text-xs uppercase tracking-wide text-slate-500">Total de ingresos</p>
+          <p class="mt-2 text-2xl font-semibold text-emerald-600 tabular" x-text="money(total('income'))"></p>
+          <p class="text-xs text-slate-400 mt-1" x-text="monthMovs('income').length + ' movimientos'"></p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-5">
+          <p class="text-xs uppercase tracking-wide text-slate-500">Total de egresos</p>
+          <p class="mt-2 text-2xl font-semibold text-rose-600 tabular" x-text="money(total('expense'))"></p>
+          <p class="text-xs text-slate-400 mt-1" x-text="monthMovs('expense').length + ' movimientos'"></p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 p-5">
+          <p class="text-xs uppercase tracking-wide text-slate-500">Balance neto</p>
+          <p class="mt-2 text-2xl font-semibold tabular" :class="net >= 0 ? 'text-emerald-600' : 'text-rose-600'" x-text="money(net)"></p>
+          <p class="text-xs mt-1" :class="net >= 0 ? 'text-emerald-600' : 'text-rose-600'" x-text="net > 0 ? 'Utilidad' : (net < 0 ? 'Pérdida' : 'Sin variación')"></p>
+        </div>
+      </div>
+
+      <!-- Desglose por categorías -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <template x-for="block in [{type:'income', title:'Ingresos por categoría', bar:'bg-emerald-500'}, {type:'expense', title:'Egresos por categoría', bar:'bg-rose-500'}]" :key="block.type">
+          <div class="bg-white rounded-xl border border-slate-200 p-5">
+            <h3 class="font-semibold mb-4" x-text="block.title"></h3>
+            <div class="space-y-4">
+              <template x-for="row in byCategory(block.type)" :key="row.name">
+                <div>
+                  <div class="flex justify-between text-sm">
+                    <span x-text="row.name"></span>
+                    <span class="tabular font-medium" x-text="money(row.total)"></span>
+                  </div>
+                  <div class="mt-1.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div class="h-full rounded-full" :class="block.bar" :style="`width:${row.pct}%`"></div>
+                  </div>
+                  <p class="text-xs text-slate-400 mt-1" x-text="row.count + ' mov. · ' + row.pct.toFixed(1) + '%'"></p>
+                </div>
+              </template>
+            </div>
+            <div class="mt-5 pt-3 border-t border-slate-100 flex justify-between text-sm font-semibold">
+              <span>Total</span>
+              <span class="tabular" x-text="money(total(block.type))"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Reporte PDF -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5 flex flex-wrap items-end gap-4">
+        <div class="grow">
+          <h3 class="font-semibold">Reporte en PDF</h3>
+          <p class="text-sm text-slate-500">Incluye el encabezado de la empresa y el resumen de <span x-text="periodLabel"></span>.</p>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Tamaño de hoja</label>
+          <select x-model="pdfOpts.format" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            <option value="letter">Carta</option>
+            <option value="half">Media carta</option>
+          </select>
+        </div>
+        <label class="flex items-center gap-2 text-sm pb-2">
+          <input type="checkbox" x-model="pdfOpts.detail" class="rounded border-slate-300">
+          Incluir detalle de movimientos
+        </label>
+        <button @click="generatePDF()" :disabled="pdfBusy"
+                class="rounded-lg bg-slate-900 text-white px-5 py-2.5 text-sm font-medium hover:bg-slate-700 disabled:opacity-50">
+          <span x-text="pdfBusy ? 'Generando…' : 'Generar Reporte PDF'"></span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ===================== INGRESOS / EGRESOS (reutilizable) ===================== -->
+    <section x-show="tab === 'income' || tab === 'expense'" class="space-y-6">
+      <div>
+        <h2 class="text-lg font-semibold" x-text="tab === 'income' ? 'Ingresos' : 'Egresos'"></h2>
+        <p class="text-sm text-slate-500">
+          <span x-text="tab === 'income' ? 'Entradas de dinero' : 'Salidas de dinero'"></span> de <span x-text="periodLabel"></span>.
+        </p>
+      </div>
+
+      <!-- Formulario -->
+      <form @submit.prevent="saveMov()" class="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <h3 class="font-semibold text-sm" x-text="form.id ? 'Editar registro' : 'Nuevo registro'"></h3>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Fecha *</label>
+            <input type="date" x-model="form.date" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Categoría *</label>
+            <select x-model="form.category" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              <option value="">Selecciona…</option>
+              <template x-for="c in categories[tab] || []" :key="c">
+                <option :value="c" x-text="c"></option>
+              </template>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Monto *</label>
+            <input type="number" step="0.01" min="0" x-model.number="form.amount" placeholder="0.00" required
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm tabular">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Descripción (opcional)</label>
+            <input type="text" x-model="form.description" maxlength="140" placeholder="Detalle breve"
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          </div>
+        </div>
+        <p x-show="error" x-text="error" class="text-sm text-rose-600"></p>
+        <div class="flex gap-2">
+          <button type="submit" class="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium hover:bg-slate-700"
+                  x-text="form.id ? 'Guardar cambios' : (tab === 'income' ? 'Registrar ingreso' : 'Registrar egreso')"></button>
+          <button type="button" x-show="form.id" @click="resetForm()" class="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50">Cancelar</button>
+        </div>
+      </form>
+
+      <!-- Listado del mes -->
+      <div class="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
+            <tr>
+              <th class="text-left px-4 py-3 font-medium">Fecha</th>
+              <th class="text-left px-4 py-3 font-medium">Categoría</th>
+              <th class="text-left px-4 py-3 font-medium">Descripción</th>
+              <th class="text-right px-4 py-3 font-medium">Monto</th>
+              <th class="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <template x-for="m in monthMovs(tab)" :key="m.id">
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-3 whitespace-nowrap" x-text="fmtDate(m.date)"></td>
+                <td class="px-4 py-3" x-text="m.category"></td>
+                <td class="px-4 py-3 text-slate-500" x-text="m.description || '—'"></td>
+                <td class="px-4 py-3 text-right tabular font-medium" :class="tab === 'income' ? 'text-emerald-600' : 'text-rose-600'" x-text="money(m.amount)"></td>
+                <td class="px-4 py-3 text-right whitespace-nowrap">
+                  <button @click="editMov(m)" class="text-slate-500 hover:text-slate-900 mr-3">Editar</button>
+                  <button @click="deleteMov(m)" class="text-rose-500 hover:text-rose-700">Eliminar</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="monthMovs(tab).length === 0">
+              <td colspan="5" class="px-4 py-10 text-center text-slate-400">Sin registros en este mes.</td>
+            </tr>
+          </tbody>
+          <tfoot x-show="monthMovs(tab).length > 0" class="bg-slate-50 font-semibold">
+            <tr>
+              <td colspan="3" class="px-4 py-3 text-right">Total del mes</td>
+              <td class="px-4 py-3 text-right tabular" x-text="money(total(tab))"></td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ CONFIGURACIÓN ============================ -->
+    <section x-show="tab === 'config'" class="space-y-6 max-w-2xl">
+      <div>
+        <h2 class="text-lg font-semibold">Configuración de la empresa</h2>
+        <p class="text-sm text-slate-500">Estos datos aparecen en el encabezado de los reportes PDF. Se guardan automáticamente.</p>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 p-5 space-y-5">
+        <!-- Logo -->
+        <div>
+          <label class="block text-xs text-slate-500 mb-2">Logo</label>
+          <div class="flex items-center gap-4">
+            <div class="h-20 w-20 rounded-lg border border-dashed border-slate-300 flex items-center justify-center overflow-hidden bg-slate-50">
+              <img x-show="config.logo" :src="config.logo" class="max-h-full max-w-full object-contain" alt="Logo">
+              <span x-show="!config.logo" class="text-xs text-slate-400">Sin logo</span>
+            </div>
+            <div class="space-y-2 grow">
+              <input type="file" accept="image/*" @change="onLogoFile($event)" class="block text-sm">
+              <div class="flex gap-2">
+                <input type="url" x-model="logoUrl" placeholder="…o pega la URL de una imagen" class="grow rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                <button type="button" @click="setLogoFromUrl()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50">Usar</button>
+              </div>
+              <button type="button" x-show="config.logo" @click="config.logo = ''" class="text-xs text-rose-500 hover:text-rose-700">Quitar logo</button>
+              <p x-show="logoMsg" x-text="logoMsg" class="text-xs text-amber-600"></p>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Nombre de la empresa</label>
+          <input type="text" x-model="config.name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Teléfono / Contacto</label>
+          <input type="text" x-model="config.phone" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Dirección física</label>
+          <textarea rows="2" x-model="config.address" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Símbolo de moneda</label>
+          <input type="text" x-model="config.currency" maxlength="5" class="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm">
+        </div>
+      </div>
+
+      <!-- Respaldo -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+        <h3 class="font-semibold">Respaldo de datos</h3>
+        <p class="text-sm text-slate-500">Los datos se guardan solo en este navegador. Descarga una copia periódicamente; si borras los datos del navegador se perderían.</p>
+        <div class="flex flex-wrap items-center gap-3">
+          <button type="button" @click="exportData()" class="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm hover:bg-slate-700">Exportar respaldo (.json)</button>
+          <label class="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 cursor-pointer">
+            Importar respaldo
+            <input type="file" accept="application/json" class="hidden" @change="importData($event)">
+          </label>
+        </div>
+        <p x-show="backupMsg" x-text="backupMsg" class="text-sm text-slate-600"></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="text-center text-xs text-slate-400 py-8">Datos guardados localmente en este navegador.</footer>
+
+  <!-- ============================ LÓGICA ============================ -->
+  <script>
+    /** Genera un id único simple */
+    const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const pad = n => String(n).padStart(2, '0');
+    const STORAGE_KEY = 'heytech_contable_v1';
+
+    function app() {
+      const now = new Date();
+
+      return {
+        // ---------- Constantes ----------
+        monthNames: ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],
+        tabs: [
+          { id: 'dashboard', label: 'Dashboard' },
+          { id: 'income',    label: 'Ingresos' },
+          { id: 'expense',   label: 'Egresos' },
+          { id: 'config',    label: 'Configuración' },
+        ],
+        // Categorías fijas
+        categories: {
+          income: ['Ventas Diarias', 'Reparaciones Diarias', 'Recuperación de Cartera', 'Venta de Refacciones'],
+          expense: ['Compra de Mercadería', 'Pago a Proveedores', 'Pago Renta', 'Pago de Internet', 'Pago Personal', 'Pago Impuesto'],
+        },
+
+        // ---------- Estado ----------
+        tab: 'dashboard',
+        selMonth: now.getMonth() + 1,
+        selYear: now.getFullYear(),
+        config: { name: 'Heytech', phone: '', address: '', logo: '', currency: '$' },
+        movs: [],               // { id, type:'income'|'expense', date, category, description, amount }
+        form: { id: null, date: '', category: '', description: '', amount: '' },
+        error: '',
+        logoUrl: '', logoMsg: '', backupMsg: '',
+        pdfOpts: { format: 'letter', detail: true },
+        pdfBusy: false,
+
+        // ---------- Inicio ----------
+        init() {
+          this.load();
+          this.form.date = this.defaultDate();
+          // Guardado automático ante cualquier cambio
+          this.$watch('config', () => this.persist(), { deep: true });
+          this.$watch('movs', () => this.persist(), { deep: true });
+          // Al cambiar de mes, ajusta la fecha por defecto del formulario
+          this.$watch('period', () => { if (!this.form.id) this.form.date = this.defaultDate(); });
+        },
+
+        // ---------- Persistencia ----------
+        load() {
+          try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return;
+            const d = JSON.parse(raw);
+            if (d.config) this.config = { ...this.config, ...d.config };
+            if (Array.isArray(d.movs)) this.movs = d.movs;
+          } catch (e) { console.error('No se pudo leer localStorage', e); }
+        },
+        persist() {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ config: this.config, movs: this.movs }));
+          } catch (e) {
+            alert('No se pudo guardar (almacenamiento lleno o bloqueado). Prueba con un logo más pequeño o exporta un respaldo.');
+          }
+        },
+
+        // ---------- Periodo seleccionado ----------
+        get period() { return `${this.selYear}-${pad(this.selMonth)}`; },
+        get periodLabel() { return `${this.monthNames[this.selMonth - 1]} ${this.selYear}`; },
+        get years() {
+          const y = new Date().getFullYear(), list = [];
+          for (let i = y - 6; i <= y + 1; i++) list.push(i);
+          if (!list.includes(this.selYear)) list.push(this.selYear);
+          return list.sort();
+        },
+        defaultDate() {
+          const t = new Date(), today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+          return today.startsWith(this.period) ? today : `${this.period}-01`;
+        },
+
+        // ---------- Cálculos ----------
+        monthMovs(type) {
+          return this.movs
+            .filter(m => m.type === type && m.date.startsWith(this.period))
+            .sort((a, b) => b.date.localeCompare(a.date));
+        },
+        total(type) { return this.monthMovs(type).reduce((s, m) => s + m.amount, 0); },
+        get net() { return Math.round((this.total('income') - this.total('expense')) * 100) / 100; },
+        /** Totales agrupados por categoría (incluye categorías en 0) */
+        byCategory(type) {
+          const list = this.monthMovs(type), tot = this.total(type);
+          return this.categories[type].map(name => {
+            const rows = list.filter(m => m.category === name);
+            const t = rows.reduce((s, m) => s + m.amount, 0);
+            return { name, total: t, count: rows.length, pct: tot > 0 ? (t / tot) * 100 : 0 };
+          });
+        },
+
+        // ---------- Formato ----------
+        money(n) {
+          const v = Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          return `${this.config.currency || '$'} ${v}`;
+        },
+        fmtDate(s) { const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; },
+
+        // ---------- Navegación ----------
+        goTab(id) { this.tab = id; this.resetForm(); },
+
+        // ---------- CRUD de movimientos ----------
+        resetForm() {
+          this.form = { id: null, date: this.defaultDate(), category: '', description: '', amount: '' };
+          this.error = '';
+        },
+        saveMov() {
+          const f = this.form, amt = Number(f.amount);
+          if (!f.date) return (this.error = 'La fecha es obligatoria.');
+          if (!f.category) return (this.error = 'Selecciona una categoría.');
+          if (!(amt > 0)) return (this.error = 'Ingresa un monto mayor a 0.');
+
+          const rec = {
+            id: f.id || uid(), type: this.tab, date: f.date, category: f.category,
+            description: (f.description || '').trim(), amount: Math.round(amt * 100) / 100,
+          };
+          if (f.id) {
+            const i = this.movs.findIndex(m => m.id === f.id);
+            if (i >= 0) this.movs.splice(i, 1, rec);
+          } else {
+            this.movs.push(rec);
+          }
+          // Si la fecha cae en otro mes, se muestra ese mes para que el usuario vea el registro
+          const [y, m] = f.date.split('-').map(Number);
+          this.selYear = y; this.selMonth = m;
+          this.resetForm();
+        },
+        editMov(m) {
+          this.form = { id: m.id, date: m.date, category: m.category, description: m.description, amount: m.amount };
+          this.error = '';
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        },
+        deleteMov(m) {
+          if (confirm(`¿Eliminar este registro de ${this.money(m.amount)}?`)) {
+            this.movs = this.movs.filter(x => x.id !== m.id);
+            if (this.form.id === m.id) this.resetForm();
+          }
+        },
+
+        // ---------- Logo ----------
+        /** Reduce la imagen a máx. 400px y la guarda como PNG (base64) para ahorrar espacio */
+        shrinkImage(src, cors) {
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            if (cors) img.crossOrigin = 'anonymous';
+            img.onload = () => {
+              const max = 400, r = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+              const c = document.createElement('canvas');
+              c.width = Math.max(1, Math.round(img.naturalWidth * r));
+              c.height = Math.max(1, Math.round(img.naturalHeight * r));
+              c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+              try { resolve({ data: c.toDataURL('image/png'), w: c.width, h: c.height }); }
+              catch (e) { reject(e); }
+            };
+            img.onerror = () => reject(new Error('No se pudo cargar la imagen'));
+            img.src = src;
+          });
+        },
+        onLogoFile(ev) {
+          const file = ev.target.files[0];
+          if (!file) return;
+          this.logoMsg = '';
+          const reader = new FileReader();
+          reader.onload = async () => {
+            try { this.config.logo = (await this.shrinkImage(reader.result, false)).data; }
+            catch (e) { this.logoMsg = 'No se pudo procesar esa imagen.'; }
+          };
+          reader.readAsDataURL(file);
+        },
+        async setLogoFromUrl() {
+          if (!this.logoUrl) return;
+          this.logoMsg = '';
+          try {
+            // Intenta convertirla a base64 (así el PDF no depende de internet ni de CORS)
+            this.config.logo = (await this.shrinkImage(this.logoUrl, true)).data;
+          } catch (e) {
+            // Si el sitio bloquea CORS, se usa la URL directa para mostrarla en pantalla
+            this.config.logo = this.logoUrl;
+            this.logoMsg = 'Ese sitio no permite copiar la imagen: se verá en pantalla, pero podría no aparecer en el PDF. Mejor sube el archivo directamente.';
+          }
+          this.logoUrl = '';
+        },
+
+        // ---------- Respaldo ----------
+        exportData() {
+          const blob = new Blob([JSON.stringify({ config: this.config, movs: this.movs }, null, 2)], { type: 'application/json' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `respaldo-contabilidad-${new Date().toISOString().slice(0, 10)}.json`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+          this.backupMsg = 'Respaldo descargado.';
+        },
+        importData(ev) {
+          const file = ev.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const d = JSON.parse(reader.result);
+              if (!Array.isArray(d.movs)) throw new Error('Formato inválido');
+              if (!confirm('Esto reemplazará los datos actuales. ¿Continuar?')) return;
+              this.config = { ...this.config, ...(d.config || {}) };
+              this.movs = d.movs;
+              this.backupMsg = 'Respaldo importado correctamente.';
+            } catch (e) { this.backupMsg = 'El archivo no es un respaldo válido.'; }
+            ev.target.value = '';
+          };
+          reader.readAsText(file);
+        },
+
+        // ---------- Reporte PDF ----------
+        async generatePDF() {
+          if (!window.jspdf) { alert('No se pudo cargar jsPDF. Revisa tu conexión a internet.'); return; }
+          this.pdfBusy = true;
+          try {
+            const { jsPDF } = window.jspdf;
+            const half = this.pdfOpts.format === 'half';
+            // Media carta: 139.7 x 215.9 mm · Carta: 215.9 x 279.4 mm
+            const doc = new jsPDF({ unit: 'mm', format: half ? [139.7, 215.9] : 'letter' });
+            const W = doc.internal.pageSize.getWidth();
+            const H = doc.internal.pageSize.getHeight();
+            const M = half ? 12 : 18;               // margen
+            const fs = half ? 8 : 10;               // tamaño de letra base
+            const dark = [30, 41, 59], gray = [100, 116, 139];
+            let y = M;
+
+            // --- Encabezado de la empresa: logo + nombre + dirección + teléfono ---
+            let textX = M, logoBottom = y;
+            if (this.config.logo) {
+              try {
+                const lg = await this.shrinkImage(this.config.logo, true);
+                const maxW = half ? 28 : 38, maxH = half ? 18 : 24;
+                const r = Math.min(maxW / lg.w, maxH / lg.h);
+                const w = lg.w * r, h = lg.h * r;
+                doc.addImage(lg.data, 'PNG', M, y, w, h);
+                textX = M + w + 5; logoBottom = y + h;
+              } catch (e) { /* si el logo falla, el reporte sale sin logo */ }
+            }
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(half ? 14 : 18); doc.setTextColor(...dark);
+            doc.text(this.config.name || 'Mi negocio', textX, y + 6);
+            doc.setFont('helvetica', 'normal'); doc.setFontSize(fs); doc.setTextColor(...gray);
+            let ty = y + 12;
+            const lh = half ? 3.8 : 4.6;
+            if (this.config.address) {
+              const lines = doc.splitTextToSize(this.config.address, W - M - textX);
+              doc.text(lines, textX, ty); ty += lines.length * lh;
+            }
+            if (this.config.phone) { doc.text('Tel: ' + this.config.phone, textX, ty); ty += lh; }
+            y = Math.max(ty, logoBottom) + 2;
+            doc.setDrawColor(...dark); doc.setLineWidth(0.5); doc.line(M, y, W - M, y);
+            y += half ? 7 : 9;
+
+            // --- Título ---
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(half ? 12 : 15); doc.setTextColor(...dark);
+            doc.text('Reporte mensual de ingresos y egresos', W / 2, y, { align: 'center' });
+            y += half ? 5.5 : 7;
+            doc.setFont('helvetica', 'normal'); doc.setFontSize(fs + 1); doc.setTextColor(...gray);
+            doc.text(`Periodo: ${this.periodLabel}`, W / 2, y, { align: 'center' });
+            y += half ? 7 : 9;
+
+            const tableBase = {
+              margin: { left: M, right: M },
+              styles: { font: 'helvetica', fontSize: fs, cellPadding: half ? 1.6 : 2.2, textColor: dark },
+              headStyles: { fillColor: dark, textColor: 255, fontStyle: 'bold' },
+              alternateRowStyles: { fillColor: [248, 250, 252] },
+              theme: 'grid',
+              tableLineColor: [226, 232, 240], tableLineWidth: 0.2,
+            };
+            const section = (title) => {
+              if (y > H - 45) { doc.addPage(); y = M; }
+              doc.setFont('helvetica', 'bold'); doc.setFontSize(fs + 2); doc.setTextColor(...dark);
+              doc.text(title, M, y); y += 2.5;
+            };
+
+            // --- Resumen general ---
+            const inc = this.total('income'), exp = this.total('expense'), net = this.net;
+            section('Resumen general');
+            doc.autoTable({
+              ...tableBase, startY: y,
+              body: [
+                ['Total de ingresos', this.money(inc)],
+                ['Total de egresos', this.money(exp)],
+                [net >= 0 ? 'Balance neto (Utilidad)' : 'Balance neto (Pérdida)', this.money(net)],
+              ],
+              columnStyles: { 0: { fontStyle: 'bold' }, 1: { halign: 'right' } },
+              didParseCell: (d) => {
+                if (d.row.index === 2) {
+                  d.cell.styles.fontStyle = 'bold';
+                  d.cell.styles.textColor = net >= 0 ? [5, 150, 105] : [225, 29, 72];
+                }
+              },
+            });
+            y = doc.lastAutoTable.finalY + (half ? 7 : 9);
+
+            // --- Desglose por categoría ---
+            for (const [type, title] of [['income', 'Ingresos por categoría'], ['expense', 'Egresos por categoría']]) {
+              section(title);
+              const rows = this.byCategory(type).map(r => [r.name, String(r.count), r.pct.toFixed(1) + '%', this.money(r.total)]);
+              doc.autoTable({
+                ...tableBase, startY: y,
+                head: [['Categoría', 'Mov.', '%', 'Monto']],
+                body: rows,
+                foot: [['Total', '', '', this.money(this.total(type))]],
+                footStyles: { fillColor: [226, 232, 240], textColor: dark, fontStyle: 'bold' },
+                columnStyles: { 1: { halign: 'center' }, 2: { halign: 'right' }, 3: { halign: 'right' } },
+              });
+              y = doc.lastAutoTable.finalY + (half ? 7 : 9);
+            }
+
+            // --- Detalle opcional de movimientos ---
+            if (this.pdfOpts.detail) {
+              for (const [type, title] of [['income', 'Detalle de ingresos'], ['expense', 'Detalle de egresos']]) {
+                const list = this.monthMovs(type).slice().reverse(); // cronológico
+                if (!list.length) continue;
+                section(title);
+                doc.autoTable({
+                  ...tableBase, startY: y,
+                  head: [['Fecha', 'Categoría', 'Descripción', 'Monto']],
+                  body: list.map(m => [this.fmtDate(m.date), m.category, m.description || '—', this.money(m.amount)]),
+                  columnStyles: { 3: { halign: 'right' } },
+                });
+                y = doc.lastAutoTable.finalY + (half ? 7 : 9);
+              }
+            }
+
+            // --- Pie de página: fecha de emisión y numeración ---
+            const total = doc.getNumberOfPages();
+            const emitted = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+            for (let i = 1; i <= total; i++) {
+              doc.setPage(i);
+              doc.setFont('helvetica', 'normal'); doc.setFontSize(half ? 7 : 8); doc.setTextColor(...gray);
+              doc.text(`Generado el ${emitted}`, M, H - 7);
+              doc.text(`Página ${i} de ${total}`, W - M, H - 7, { align: 'right' });
+            }
+
+            const safe = (this.config.name || 'reporte').replace(/[^\w\-]+/g, '_');
+            doc.save(`Reporte_${safe}_${this.period}.pdf`);
+          } catch (e) {
+            console.error(e);
+            alert('Ocurrió un error al generar el PDF. Revisa la consola del navegador.');
+          } finally {
+            this.pdfBusy = false;
+          }
+        },
+      };
+    }
+  </script>
+</body>
+</html>
