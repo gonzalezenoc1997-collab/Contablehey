@@ -287,6 +287,36 @@
         </div>
       </div>
 
+      <!-- Categorías -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5 space-y-5">
+        <div>
+          <h3 class="font-semibold">Categorías</h3>
+          <p class="text-sm text-slate-500">Agrega las categorías que necesites. Las fijas no se pueden eliminar, y una categoría con registros tampoco.</p>
+        </div>
+        <template x-for="blk in [{type:'income', title:'Ingresos'}, {type:'expense', title:'Egresos'}]" :key="blk.type">
+          <div>
+            <h4 class="text-sm font-medium mb-2" x-text="blk.title"></h4>
+            <div class="flex flex-wrap gap-2 mb-3">
+              <template x-for="c in defaultCategories[blk.type]" :key="c">
+                <span class="rounded-full bg-slate-100 text-slate-600 text-xs px-3 py-1" x-text="c"></span>
+              </template>
+              <template x-for="c in customCats[blk.type]" :key="'c-' + c">
+                <span class="rounded-full bg-slate-900 text-white text-xs pl-3 pr-1.5 py-1 inline-flex items-center gap-1.5">
+                  <span x-text="c"></span>
+                  <button type="button" @click="removeCategory(blk.type, c)" class="h-4 w-4 rounded-full hover:bg-white/20 leading-none" title="Eliminar">×</button>
+                </span>
+              </template>
+            </div>
+            <form @submit.prevent="addCategory(blk.type)" class="flex gap-2">
+              <input type="text" x-model="newCat[blk.type]" maxlength="40" :placeholder="'Nueva categoría de ' + blk.title.toLowerCase()"
+                     class="grow rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <button type="submit" class="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm hover:bg-slate-700">Agregar</button>
+            </form>
+            <p x-show="catMsg[blk.type]" x-text="catMsg[blk.type]" class="text-xs text-rose-600 mt-1.5"></p>
+          </div>
+        </template>
+      </div>
+
       <!-- Respaldo -->
       <div class="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
         <h3 class="font-semibold">Respaldo de datos</h3>
@@ -324,10 +354,25 @@
           { id: 'expense',   label: 'Egresos' },
           { id: 'config',    label: 'Configuración' },
         ],
-        // Categorías fijas
-        categories: {
+        // Categorías fijas (no se pueden eliminar)
+        defaultCategories: {
           income: ['Ventas Diarias', 'Reparaciones Diarias', 'Recuperación de Cartera', 'Venta de Refacciones'],
           expense: ['Compra de Mercadería', 'Pago a Proveedores', 'Pago Renta', 'Pago de Internet', 'Pago Personal', 'Pago Impuesto'],
+        },
+        // Categorías agregadas por el usuario (se guardan en localStorage)
+        customCats: { income: [], expense: [] },
+        newCat: { income: '', expense: '' },
+        catMsg: { income: '', expense: '' },
+
+        /** Lista final de categorías = fijas + personalizadas (+ cualquier categoría usada en registros importados) */
+        get categories() {
+          const out = {};
+          for (const t of ['income', 'expense']) {
+            const list = [...this.defaultCategories[t], ...this.customCats[t]];
+            this.movs.forEach(m => { if (m.type === t && !list.includes(m.category)) list.push(m.category); });
+            out[t] = list;
+          }
+          return out;
         },
 
         // ---------- Estado ----------
@@ -349,6 +394,7 @@
           // Guardado automático ante cualquier cambio
           this.$watch('config', () => this.persist(), { deep: true });
           this.$watch('movs', () => this.persist(), { deep: true });
+          this.$watch('customCats', () => this.persist(), { deep: true });
           // Al cambiar de mes, ajusta la fecha por defecto del formulario
           this.$watch('period', () => { if (!this.form.id) this.form.date = this.defaultDate(); });
         },
@@ -361,11 +407,12 @@
             const d = JSON.parse(raw);
             if (d.config) this.config = { ...this.config, ...d.config };
             if (Array.isArray(d.movs)) this.movs = d.movs;
+            if (d.customCats) this.customCats = { income: d.customCats.income || [], expense: d.customCats.expense || [] };
           } catch (e) { console.error('No se pudo leer localStorage', e); }
         },
         persist() {
           try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({ config: this.config, movs: this.movs }));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ config: this.config, movs: this.movs, customCats: this.customCats }));
           } catch (e) {
             alert('No se pudo guardar (almacenamiento lleno o bloqueado). Prueba con un logo más pequeño o exporta un respaldo.');
           }
@@ -451,6 +498,27 @@
           }
         },
 
+        // ---------- Categorías personalizadas ----------
+        addCategory(type) {
+          const name = (this.newCat[type] || '').trim().replace(/\s+/g, ' ');
+          this.catMsg[type] = '';
+          if (!name) return;
+          if (name.length > 40) { this.catMsg[type] = 'Máximo 40 caracteres.'; return; }
+          const exists = this.categories[type].some(c => c.toLowerCase() === name.toLowerCase());
+          if (exists) { this.catMsg[type] = 'Esa categoría ya existe.'; return; }
+          this.customCats[type].push(name);
+          this.newCat[type] = '';
+        },
+        removeCategory(type, name) {
+          const used = this.movs.filter(m => m.type === type && m.category === name).length;
+          if (used > 0) {
+            this.catMsg[type] = `No se puede eliminar "${name}": tiene ${used} registro(s). Elimínalos o edítalos primero.`;
+            return;
+          }
+          this.customCats[type] = this.customCats[type].filter(c => c !== name);
+          this.catMsg[type] = '';
+        },
+
         // ---------- Logo ----------
         /** Reduce la imagen a máx. 400px y la guarda como PNG (base64) para ahorrar espacio */
         shrinkImage(src, cors) {
@@ -497,7 +565,7 @@
 
         // ---------- Respaldo ----------
         exportData() {
-          const blob = new Blob([JSON.stringify({ config: this.config, movs: this.movs }, null, 2)], { type: 'application/json' });
+          const blob = new Blob([JSON.stringify({ config: this.config, movs: this.movs, customCats: this.customCats }, null, 2)], { type: 'application/json' });
           const a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
           a.download = `respaldo-contabilidad-${new Date().toISOString().slice(0, 10)}.json`;
@@ -516,6 +584,7 @@
               if (!confirm('Esto reemplazará los datos actuales. ¿Continuar?')) return;
               this.config = { ...this.config, ...(d.config || {}) };
               this.movs = d.movs;
+              this.customCats = { income: (d.customCats && d.customCats.income) || [], expense: (d.customCats && d.customCats.expense) || [] };
               this.backupMsg = 'Respaldo importado correctamente.';
             } catch (e) { this.backupMsg = 'El archivo no es un respaldo válido.'; }
             ev.target.value = '';
